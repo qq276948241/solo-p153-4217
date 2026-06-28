@@ -12,6 +12,7 @@ import (
 	"groupbuy/internal/config"
 	"groupbuy/internal/db"
 	"groupbuy/internal/model"
+	"groupbuy/internal/service"
 )
 
 type CreateOrderReq struct {
@@ -51,6 +52,24 @@ func CreateOrder(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "团品不属于该团期"})
 		return
 	}
+	if err := service.Stock.CheckAvailable(product.ID, req.Qty); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	tx := db.DB.Begin()
+	defer func() {
+		if r := recover(); r != nil {
+			tx.Rollback()
+		}
+	}()
+
+	if err := service.Stock.Deduct(tx, product.ID, req.Qty); err != nil {
+		tx.Rollback()
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
 	totalPrice := product.Price * float64(req.Qty)
 	pickupCode := generatePickupCode()
 	for {
@@ -61,30 +80,6 @@ func CreateOrder(c *gin.Context) {
 		}
 		pickupCode = generatePickupCode()
 	}
-
-	tx := db.DB.Begin()
-	defer func() {
-		if r := recover(); r != nil {
-			tx.Rollback()
-		}
-	}()
-
-	if product.Stock > 0 {
-		result := tx.Model(&model.Product{}).
-			Where("id = ? AND stock_sold + ? <= stock", product.ID, req.Qty).
-			Update("stock_sold", db.DB.Raw("stock_sold + ?", req.Qty))
-		if result.Error != nil {
-			tx.Rollback()
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "扣减库存失败"})
-			return
-		}
-		if result.RowsAffected == 0 {
-			tx.Rollback()
-			c.JSON(http.StatusBadRequest, gin.H{"error": "库存不足，该团品已售罄"})
-			return
-		}
-	}
-
 	order := model.Order{
 		GroupID:     req.GroupID,
 		ProductID:   req.ProductID,
@@ -106,8 +101,7 @@ func CreateOrder(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "提交订单失败"})
 		return
 	}
-	db.DB.First(&product, product.ID)
-	order.Product = product
+	db.DB.Preload("Product").First(&order, order.ID)
 	c.JSON(http.StatusCreated, order)
 }
 
@@ -174,13 +168,10 @@ func CancelOrder(c *gin.Context) {
 		return
 	}
 
-	var product model.Product
-	if err := tx.First(&product, order.ProductID).Error; err == nil && product.Stock > 0 {
-		if err := tx.Model(&product).Update("stock_sold", db.DB.Raw("CASE WHEN stock_sold - ? >= 0 THEN stock_sold - ? ELSE 0 END", order.Qty, order.Qty)).Error; err != nil {
-			tx.Rollback()
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "回滚库存失败"})
-			return
-		}
+	if err := service.Stock.Restore(tx, order.ProductID, order.Qty); err != nil {
+		tx.Rollback()
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
 	}
 
 	if err := tx.Commit().Error; err != nil {
@@ -226,14 +217,11 @@ func ExportOrders(c *gin.Context) {
 		stock := "不限"
 		stockSold := "-"
 		stockRemaining := "不限"
-		if o.Product.Stock > 0 {
+		remaining := service.Stock.GetRemaining(o.Product)
+		if remaining >= 0 {
 			stock = fmt.Sprintf("%d", o.Product.Stock)
 			stockSold = fmt.Sprintf("%d", o.Product.StockSold)
-			sr := o.Product.Stock - o.Product.StockSold
-			if sr < 0 {
-				sr = 0
-			}
-			stockRemaining = fmt.Sprintf("%d", sr)
+			stockRemaining = fmt.Sprintf("%d", remaining)
 		}
 		w.Write([]string{
 			fmt.Sprintf("%d", o.ID),

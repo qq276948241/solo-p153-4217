@@ -8,6 +8,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"groupbuy/internal/db"
 	"groupbuy/internal/model"
+	"groupbuy/internal/service"
 )
 
 func CutoffGroups(c *gin.Context) {
@@ -61,13 +62,7 @@ func generateDeliveryList(groupID, leaderID uint) error {
 	}
 	var items []model.DeliveryItem
 	for _, o := range orders {
-		stockRemaining := -1
-		if o.Product.Stock > 0 {
-			stockRemaining = o.Product.Stock - o.Product.StockSold
-			if stockRemaining < 0 {
-				stockRemaining = 0
-			}
-		}
+		stockRemaining := service.Stock.GetRemaining(o.Product)
 		items = append(items, model.DeliveryItem{
 			DeliveryListID: dl.ID,
 			OrderID:        o.ID,
