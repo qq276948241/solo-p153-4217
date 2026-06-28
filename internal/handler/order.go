@@ -52,10 +52,6 @@ func CreateOrder(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "团品不属于该团期"})
 		return
 	}
-	if err := service.Stock.CheckAvailable(product.ID, req.Qty); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
 
 	tx := db.DB.Begin()
 	defer func() {

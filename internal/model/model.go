@@ -44,6 +44,7 @@ type Product struct {
 	Price          float64        `gorm:"not null" json:"price"`
 	Stock          int            `gorm:"default:0" json:"stock"`
 	StockSold      int            `gorm:"default:0" json:"stock_sold"`
+	Version        int            `gorm:"default:0" json:"version"`
 	StockRemaining int            `gorm:"-" json:"stock_remaining"`
 	CreatedAt      time.Time      `json:"created_at"`
 	UpdatedAt      time.Time      `json:"updated_at"`
@@ -51,7 +52,7 @@ type Product struct {
 	Group          Group          `gorm:"foreignKey:GroupID" json:"-"`
 }
 
-func (p *Product) AfterFind() error {
+func (p *Product) AfterFind(tx *gorm.DB) error {
 	if p.Stock > 0 {
 		p.StockRemaining = p.Stock - p.StockSold
 		if p.StockRemaining < 0 {
