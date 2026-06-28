@@ -1,0 +1,20 @@
+server:
+  port: 8080
+
+database:
+  driver: sqlite
+  dsn: "./groupbuy.db"
+
+upload:
+  dir: "./uploads"
+  max_size_mb: 5
+
+export:
+  dir: "./export"
+
+scheduler:
+  cutoff_hour: 22
+  commission_day: 28
+
+commission:
+  rate: 0.10
