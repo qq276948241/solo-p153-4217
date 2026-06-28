@@ -61,11 +61,21 @@ func generateDeliveryList(groupID, leaderID uint) error {
 	}
 	var items []model.DeliveryItem
 	for _, o := range orders {
+		stockRemaining := -1
+		if o.Product.Stock > 0 {
+			stockRemaining = o.Product.Stock - o.Product.StockSold
+			if stockRemaining < 0 {
+				stockRemaining = 0
+			}
+		}
 		items = append(items, model.DeliveryItem{
 			DeliveryListID: dl.ID,
 			OrderID:        o.ID,
 			ProductName:    o.Product.Name,
 			Qty:            o.Qty,
+			Stock:          o.Product.Stock,
+			StockSold:      o.Product.StockSold,
+			StockRemaining: stockRemaining,
 			BuyerName:      o.BuyerName,
 			BuyerPhone:     o.BuyerPhone,
 			PickupPoint:    o.PickupPoint,

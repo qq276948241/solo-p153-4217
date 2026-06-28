@@ -51,14 +51,6 @@ func CreateOrder(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "团品不属于该团期"})
 		return
 	}
-	if product.Stock > 0 {
-		var sold int64
-		db.DB.Model(&model.Order{}).Where("product_id = ? AND status != ?", req.ProductID, "cancelled").Count(&sold)
-		if int(sold)+req.Qty > product.Stock {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "库存不足"})
-			return
-		}
-	}
 	totalPrice := product.Price * float64(req.Qty)
 	pickupCode := generatePickupCode()
 	for {
@@ -69,6 +61,30 @@ func CreateOrder(c *gin.Context) {
 		}
 		pickupCode = generatePickupCode()
 	}
+
+	tx := db.DB.Begin()
+	defer func() {
+		if r := recover(); r != nil {
+			tx.Rollback()
+		}
+	}()
+
+	if product.Stock > 0 {
+		result := tx.Model(&model.Product{}).
+			Where("id = ? AND stock_sold + ? <= stock", product.ID, req.Qty).
+			Update("stock_sold", db.DB.Raw("stock_sold + ?", req.Qty))
+		if result.Error != nil {
+			tx.Rollback()
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "扣减库存失败"})
+			return
+		}
+		if result.RowsAffected == 0 {
+			tx.Rollback()
+			c.JSON(http.StatusBadRequest, gin.H{"error": "库存不足，该团品已售罄"})
+			return
+		}
+	}
+
 	order := model.Order{
 		GroupID:     req.GroupID,
 		ProductID:   req.ProductID,
@@ -81,10 +97,17 @@ func CreateOrder(c *gin.Context) {
 		PickupCode:  pickupCode,
 		Status:      "pending",
 	}
-	if err := db.DB.Create(&order).Error; err != nil {
+	if err := tx.Create(&order).Error; err != nil {
+		tx.Rollback()
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	if err := tx.Commit().Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "提交订单失败"})
+		return
+	}
+	db.DB.First(&product, product.ID)
+	order.Product = product
 	c.JSON(http.StatusCreated, order)
 }
 
@@ -137,7 +160,34 @@ func CancelOrder(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "订单已取消"})
 		return
 	}
-	db.DB.Model(&order).Update("status", "cancelled")
+
+	tx := db.DB.Begin()
+	defer func() {
+		if r := recover(); r != nil {
+			tx.Rollback()
+		}
+	}()
+
+	if err := tx.Model(&order).Update("status", "cancelled").Error; err != nil {
+		tx.Rollback()
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "取消订单失败"})
+		return
+	}
+
+	var product model.Product
+	if err := tx.First(&product, order.ProductID).Error; err == nil && product.Stock > 0 {
+		if err := tx.Model(&product).Update("stock_sold", db.DB.Raw("CASE WHEN stock_sold - ? >= 0 THEN stock_sold - ? ELSE 0 END", order.Qty, order.Qty)).Error; err != nil {
+			tx.Rollback()
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "回滚库存失败"})
+			return
+		}
+	}
+
+	if err := tx.Commit().Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "提交失败"})
+		return
+	}
+	db.DB.Preload("Product").First(&order, id)
 	c.JSON(http.StatusOK, order)
 }
 
@@ -171,11 +221,26 @@ func ExportOrders(c *gin.Context) {
 	defer f.Close()
 	w := csv.NewWriter(f)
 	defer w.Flush()
-	w.Write([]string{"订单ID", "团品名称", "购买人", "手机号", "自提点", "数量", "总价", "提货码", "状态", "下单时间"})
+	w.Write([]string{"订单ID", "团品名称", "总库存", "已售出", "剩余库存", "购买人", "手机号", "自提点", "数量", "总价", "提货码", "状态", "下单时间"})
 	for _, o := range orders {
+		stock := "不限"
+		stockSold := "-"
+		stockRemaining := "不限"
+		if o.Product.Stock > 0 {
+			stock = fmt.Sprintf("%d", o.Product.Stock)
+			stockSold = fmt.Sprintf("%d", o.Product.StockSold)
+			sr := o.Product.Stock - o.Product.StockSold
+			if sr < 0 {
+				sr = 0
+			}
+			stockRemaining = fmt.Sprintf("%d", sr)
+		}
 		w.Write([]string{
 			fmt.Sprintf("%d", o.ID),
 			o.Product.Name,
+			stock,
+			stockSold,
+			stockRemaining,
 			o.BuyerName,
 			o.BuyerPhone,
 			o.PickupPoint,

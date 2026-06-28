@@ -36,17 +36,31 @@ type ProductSpec struct {
 }
 
 type Product struct {
-	ID        uint           `gorm:"primarykey" json:"id"`
-	GroupID   uint           `gorm:"index;not null" json:"group_id"`
-	Name      string         `gorm:"size:200;not null" json:"name"`
-	Image     string         `gorm:"size:500" json:"image"`
-	Specs     string         `gorm:"type:text" json:"specs"`
-	Price     float64        `gorm:"not null" json:"price"`
-	Stock     int            `gorm:"default:0" json:"stock"`
-	CreatedAt time.Time      `json:"created_at"`
-	UpdatedAt time.Time      `json:"updated_at"`
-	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
-	Group     Group          `gorm:"foreignKey:GroupID" json:"-"`
+	ID             uint           `gorm:"primarykey" json:"id"`
+	GroupID        uint           `gorm:"index;not null" json:"group_id"`
+	Name           string         `gorm:"size:200;not null" json:"name"`
+	Image          string         `gorm:"size:500" json:"image"`
+	Specs          string         `gorm:"type:text" json:"specs"`
+	Price          float64        `gorm:"not null" json:"price"`
+	Stock          int            `gorm:"default:0" json:"stock"`
+	StockSold      int            `gorm:"default:0" json:"stock_sold"`
+	StockRemaining int            `gorm:"-" json:"stock_remaining"`
+	CreatedAt      time.Time      `json:"created_at"`
+	UpdatedAt      time.Time      `json:"updated_at"`
+	DeletedAt      gorm.DeletedAt `gorm:"index" json:"-"`
+	Group          Group          `gorm:"foreignKey:GroupID" json:"-"`
+}
+
+func (p *Product) AfterFind() error {
+	if p.Stock > 0 {
+		p.StockRemaining = p.Stock - p.StockSold
+		if p.StockRemaining < 0 {
+			p.StockRemaining = 0
+		}
+	} else {
+		p.StockRemaining = -1
+	}
+	return nil
 }
 
 type Order struct {
@@ -88,6 +102,9 @@ type DeliveryItem struct {
 	OrderID        uint      `gorm:"index;not null" json:"order_id"`
 	ProductName    string    `gorm:"size:200;not null" json:"product_name"`
 	Qty            int       `gorm:"not null" json:"qty"`
+	Stock          int       `gorm:"default:0" json:"stock"`
+	StockSold      int       `gorm:"default:0" json:"stock_sold"`
+	StockRemaining int       `gorm:"default:0" json:"stock_remaining"`
 	BuyerName      string    `gorm:"size:50;not null" json:"buyer_name"`
 	BuyerPhone     string    `gorm:"size:20;not null" json:"buyer_phone"`
 	PickupPoint    string    `gorm:"size:200;not null" json:"pickup_point"`
